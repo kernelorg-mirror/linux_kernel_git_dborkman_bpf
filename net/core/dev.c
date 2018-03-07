@@ -3314,12 +3314,29 @@ int dev_loopback_xmit(struct net *net, struct sock *sk, struct sk_buff *skb)
 }
 EXPORT_SYMBOL(dev_loopback_xmit);
 
-#ifdef CONFIG_NET_EGRESS
+#ifdef CONFIG_NET_SCH_MINIQ
+static int mini_qdisc_builtin_run(const struct mini_Qdisc *miniq,
+				  struct sk_buff *skb,
+				  struct tcf_result *res)
+{
+	int ret;
+
+	qdisc_skb_cb(skb)->tc_classid = 0;
+
+	rcu_read_lock();
+	bpf_compute_data_pointers(skb);
+	ret = BPF_PROG_RUN(miniq->entry, skb);
+	rcu_read_unlock();
+
+	res->classid = qdisc_skb_cb(skb)->tc_classid;
+	return ret;
+}
+
 static struct sk_buff *
 sch_handle_egress(struct sk_buff *skb, int *ret, struct net_device *dev)
 {
 	struct mini_Qdisc *miniq = rcu_dereference_bh(dev->miniq_egress);
-	struct tcf_result cl_res;
+	struct tcf_result res;
 
 	if (!miniq)
 		return skb;
@@ -3327,12 +3344,15 @@ sch_handle_egress(struct sk_buff *skb, int *ret, struct net_device *dev)
 	/* qdisc_skb_cb(skb)->pkt_len was already set by the caller. */
 	mini_qdisc_bstats_cpu_update(miniq, skb);
 
-	switch (tcf_classify(skb, miniq->filter_list, &cl_res, false)) {
+	switch (miniq->tp_list ?
+		tcf_classify(skb, miniq->tp_list, &res, false) :
+		mini_qdisc_builtin_run(miniq, skb, &res)) {
 	case TC_ACT_OK:
 	case TC_ACT_RECLASSIFY:
-		skb->tc_index = TC_H_MIN(cl_res.classid);
+		skb->tc_index = TC_H_MIN(res.classid);
 		break;
 	case TC_ACT_SHOT:
+do_shoot:
 		mini_qdisc_qstats_cpu_drop(miniq);
 		*ret = NET_XMIT_DROP;
 		kfree_skb(skb);
@@ -3349,12 +3369,16 @@ sch_handle_egress(struct sk_buff *skb, int *ret, struct net_device *dev)
 		*ret = NET_XMIT_SUCCESS;
 		return NULL;
 	default:
+		if (miniq->entry)
+			goto do_shoot;
+		/* fall-through */
+	case TC_ACT_UNSPEC:
 		break;
 	}
 
 	return skb;
 }
-#endif /* CONFIG_NET_EGRESS */
+#endif /* CONFIG_NET_SCH_MINIQ */
 
 static inline int get_xps_queue(struct net_device *dev, struct sk_buff *skb)
 {
@@ -3491,7 +3515,7 @@ static int __dev_queue_xmit(struct sk_buff *skb, void *accel_priv)
 	skb_update_prio(skb);
 
 	qdisc_pkt_len_init(skb);
-#ifdef CONFIG_NET_CLS_ACT
+#if defined(CONFIG_NET_CLS_ACT) || defined(CONFIG_NET_SCH_MINIQ)
 	skb->tc_at_ingress = 0;
 # ifdef CONFIG_NET_EGRESS
 	if (static_key_false(&egress_needed)) {
@@ -4260,13 +4284,25 @@ int (*br_fdb_test_addr_hook)(struct net_device *dev,
 EXPORT_SYMBOL_GPL(br_fdb_test_addr_hook);
 #endif
 
+#ifdef CONFIG_NET_SCH_MINIQ
+static int mini_qdisc_builtin_run_adj(const struct mini_Qdisc *miniq,
+				      struct sk_buff *skb,
+				      struct tcf_result *res)
+{
+	int ret;
+
+	__skb_push(skb, skb->mac_len);
+	ret = mini_qdisc_builtin_run(miniq, skb, res);
+	__skb_pull(skb, skb->mac_len);
+	return ret;
+}
+
 static inline struct sk_buff *
 sch_handle_ingress(struct sk_buff *skb, struct packet_type **pt_prev, int *ret,
 		   struct net_device *orig_dev)
 {
-#ifdef CONFIG_NET_CLS_ACT
 	struct mini_Qdisc *miniq = rcu_dereference_bh(skb->dev->miniq_ingress);
-	struct tcf_result cl_res;
+	struct tcf_result res;
 
 	/* If there's at least one ingress present somewhere (so
 	 * we get here via enabled static key), remaining devices
@@ -4285,12 +4321,15 @@ sch_handle_ingress(struct sk_buff *skb, struct packet_type **pt_prev, int *ret,
 	skb->tc_at_ingress = 1;
 	mini_qdisc_bstats_cpu_update(miniq, skb);
 
-	switch (tcf_classify(skb, miniq->filter_list, &cl_res, false)) {
+	switch (miniq->tp_list ?
+		tcf_classify(skb, miniq->tp_list, &res, false) :
+		mini_qdisc_builtin_run_adj(miniq, skb, &res)) {
 	case TC_ACT_OK:
 	case TC_ACT_RECLASSIFY:
-		skb->tc_index = TC_H_MIN(cl_res.classid);
+		skb->tc_index = TC_H_MIN(res.classid);
 		break;
 	case TC_ACT_SHOT:
+do_shoot:
 		mini_qdisc_qstats_cpu_drop(miniq);
 		kfree_skb(skb);
 		return NULL;
@@ -4308,11 +4347,16 @@ sch_handle_ingress(struct sk_buff *skb, struct packet_type **pt_prev, int *ret,
 		skb_do_redirect(skb);
 		return NULL;
 	default:
+		if (miniq->entry)
+			goto do_shoot;
+		/* fall-through */
+	case TC_ACT_UNSPEC:
 		break;
 	}
-#endif /* CONFIG_NET_CLS_ACT */
+
 	return skb;
 }
+#endif /* CONFIG_NET_SCH_MINIQ */
 
 /**
  *	netdev_is_rx_handler_busy - check if receive handler is registered
@@ -4478,10 +4522,11 @@ another_round:
 skip_taps:
 #ifdef CONFIG_NET_INGRESS
 	if (static_key_false(&ingress_needed)) {
+# ifdef CONFIG_NET_SCH_MINIQ
 		skb = sch_handle_ingress(skb, &pt_prev, &ret, orig_dev);
 		if (!skb)
 			goto out;
-
+# endif
 		if (nf_ingress(skb, &pt_prev, &ret, orig_dev) < 0)
 			goto out;
 	}
@@ -8244,7 +8289,7 @@ struct netdev_queue *dev_ingress_queue_create(struct net_device *dev)
 {
 	struct netdev_queue *queue = dev_ingress_queue(dev);
 
-#ifdef CONFIG_NET_CLS_ACT
+#ifdef CONFIG_NET_SCH_MINIQ
 	if (queue)
 		return queue;
 	queue = kzalloc(sizeof(*queue), GFP_KERNEL);

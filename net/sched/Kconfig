@@ -44,6 +44,9 @@ if NET_SCHED
 
 comment "Queueing/Scheduling"
 
+config NET_SCH_MINIQ
+	bool
+
 config NET_SCH_CBQ
 	tristate "Class Based Queueing (CBQ)"
 	---help---
@@ -322,7 +325,8 @@ config NET_SCH_PIE
 
 config NET_SCH_INGRESS
 	tristate "Ingress/classifier-action Qdisc"
-	depends on NET_CLS_ACT
+	depends on NET_CLS_ACT || NET_CLS_BPF
+	select NET_SCH_MINIQ
 	select NET_INGRESS
 	select NET_EGRESS
 	---help---
@@ -336,6 +340,20 @@ config NET_SCH_INGRESS
 
 	  To compile this code as a module, choose M here: the module will be
 	  called sch_ingress with alias of sch_clsact.
+
+config NET_SCH_MINIACT
+	tristate "Ingress/egress BPF action-based Qdisc (MINIACT)"
+	depends on BPF_SYSCALL
+	select NET_SCH_MINIQ
+	select NET_INGRESS
+	select NET_EGRESS
+	---help---
+	  Say Y here if you want to run BPF programs for incoming and/or outgoing
+	  packets. This lightweight classless pseudo qdisc directly runs BPF programs
+	  natively at the tc ingress/egress hooks. Also here, for outgoing packets,
+	  BPF programs are executed in transmit path _before_ real enqueuing to an
+	  egress qdisc happens. To compile this code as a module, choose M here: the
+	  module will be called sch_miniact.
 
 config NET_SCH_PLUG
 	tristate "Plug network traffic until release (PLUG)"
@@ -673,6 +691,7 @@ config NET_EMATCH_IPT
 config NET_CLS_ACT
 	bool "Actions"
 	select NET_CLS
+	select NET_SCH_MINIQ
 	---help---
 	  Say Y here if you want to use traffic control actions. Actions
 	  get attached to classifiers and are invoked after a successful

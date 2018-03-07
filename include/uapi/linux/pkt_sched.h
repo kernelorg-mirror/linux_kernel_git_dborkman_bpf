@@ -74,6 +74,7 @@ struct tc_estimator {
 #define TC_H_ROOT	(0xFFFFFFFFU)
 #define TC_H_INGRESS    (0xFFFFFFF1U)
 #define TC_H_CLSACT	TC_H_INGRESS
+#define TC_H_MINIACT	TC_H_INGRESS
 
 #define TC_H_MIN_PRIORITY	0xFFE0U
 #define TC_H_MIN_INGRESS	0xFFF2U
@@ -933,5 +934,24 @@ enum {
 };
 
 #define TCA_CBS_MAX (__TCA_CBS_MAX - 1)
+
+/* Mini-act Qdisc */
+
+enum {
+	TCA_MINIACT_PARMS_INGRESS = 1,
+	TCA_MINIACT_PARMS_EGRESS,
+	__TCA_MINIACT_MAX,
+#define TCA_MINIACT_MAX		(__TCA_MINIACT_MAX - 1)
+};
+
+/* Supported mini-act flags. */
+#define TCA_MINIACT_OFFLOAD	(1ULL << 0)
+
+enum {
+	TCA_MINIACT_PARMS_PROGS = 1,
+	TCA_MINIACT_PARMS_FLAGS,
+	__TCA_MINIACT_PARMS_MAX,
+#define TCA_MINIACT_PARMS_MAX	(__TCA_MINIACT_PARMS_MAX - 1)
+};
 
 #endif
