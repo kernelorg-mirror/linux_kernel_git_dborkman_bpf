@@ -128,14 +128,41 @@ static void nfp_bpf_vnic_free(struct nfp_app *app, struct nfp_net *nn)
 	kfree(bv);
 }
 
+static int nfp_bpf_setup_tc_common(struct nfp_net *nn, struct bpf_prog *prog,
+				   struct bpf_prog *oldprog,
+				   struct netlink_ext_ack *extack)
+{
+	struct nfp_bpf_vnic *bv;
+	int err;
+
+	if (!nfp_net_ebpf_capable(nn)) {
+		NL_SET_ERR_MSG_MOD(extack,
+				   "NFP firmware does not support eBPF offload");
+		return -EOPNOTSUPP;
+	}
+
+	bv = nn->app_priv;
+	/* Don't remove if oldprog doesn't match driver's state */
+	if (bv->tc_prog != oldprog) {
+		oldprog = NULL;
+		if (!prog)
+			return 0;
+	}
+
+	err = nfp_net_bpf_offload(nn, prog, oldprog, extack);
+	if (err)
+		return err;
+
+	bv->tc_prog = prog;
+	nn->port->tc_offload_cnt = !!bv->tc_prog;
+	return 0;
+}
+
 static int nfp_bpf_setup_tc_block_cb(enum tc_setup_type type,
 				     void *type_data, void *cb_priv)
 {
 	struct tc_cls_bpf_offload *cls_bpf = type_data;
 	struct nfp_net *nn = cb_priv;
-	struct bpf_prog *oldprog;
-	struct nfp_bpf_vnic *bv;
-	int err;
 
 	if (type != TC_SETUP_CLSBPF) {
 		NL_SET_ERR_MSG_MOD(cls_bpf->common.extack,
@@ -144,11 +171,6 @@ static int nfp_bpf_setup_tc_block_cb(enum tc_setup_type type,
 	}
 	if (!tc_cls_can_offload_and_chain0(nn->dp.netdev, &cls_bpf->common))
 		return -EOPNOTSUPP;
-	if (!nfp_net_ebpf_capable(nn)) {
-		NL_SET_ERR_MSG_MOD(cls_bpf->common.extack,
-				   "NFP firmware does not support eBPF offload");
-		return -EOPNOTSUPP;
-	}
 	if (cls_bpf->common.protocol != htons(ETH_P_ALL)) {
 		NL_SET_ERR_MSG_MOD(cls_bpf->common.extack,
 				   "only ETH_P_ALL supported as filter protocol");
@@ -166,24 +188,8 @@ static int nfp_bpf_setup_tc_block_cb(enum tc_setup_type type,
 	if (cls_bpf->command != TC_CLSBPF_OFFLOAD)
 		return -EOPNOTSUPP;
 
-	bv = nn->app_priv;
-	oldprog = cls_bpf->oldprog;
-
-	/* Don't remove if oldprog doesn't match driver's state */
-	if (bv->tc_prog != oldprog) {
-		oldprog = NULL;
-		if (!cls_bpf->prog)
-			return 0;
-	}
-
-	err = nfp_net_bpf_offload(nn, cls_bpf->prog, oldprog,
-				  cls_bpf->common.extack);
-	if (err)
-		return err;
-
-	bv->tc_prog = cls_bpf->prog;
-	nn->port->tc_offload_cnt = !!bv->tc_prog;
-	return 0;
+	return nfp_bpf_setup_tc_common(nn, cls_bpf->prog, cls_bpf->oldprog,
+				       cls_bpf->common.extack);
 }
 
 static int nfp_bpf_setup_tc_block(struct net_device *netdev,
@@ -209,12 +215,23 @@ static int nfp_bpf_setup_tc_block(struct net_device *netdev,
 	}
 }
 
+static int nfp_bpf_setup_tc_bpf(struct net_device *netdev,
+				struct tc_bpf_offload *req)
+{
+	struct nfp_net *nn = netdev_priv(netdev);
+
+	return nfp_bpf_setup_tc_common(nn, req->prog, req->oldprog,
+				       req->extack);
+}
+
 static int nfp_bpf_setup_tc(struct nfp_app *app, struct net_device *netdev,
 			    enum tc_setup_type type, void *type_data)
 {
 	switch (type) {
 	case TC_SETUP_BLOCK:
 		return nfp_bpf_setup_tc_block(netdev, type_data);
+	case TC_SETUP_BPF:
+		return nfp_bpf_setup_tc_bpf(netdev, type_data);
 	default:
 		return -EOPNOTSUPP;
 	}
