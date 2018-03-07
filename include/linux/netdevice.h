@@ -787,6 +787,7 @@ enum tc_setup_type {
 	TC_SETUP_CLSMATCHALL,
 	TC_SETUP_CLSBPF,
 	TC_SETUP_BLOCK,
+	TC_SETUP_BPF,
 	TC_SETUP_QDISC_CBS,
 	TC_SETUP_QDISC_RED,
 	TC_SETUP_QDISC_PRIO,
@@ -1836,7 +1837,7 @@ struct net_device {
 	rx_handler_func_t __rcu	*rx_handler;
 	void __rcu		*rx_handler_data;
 
-#ifdef CONFIG_NET_CLS_ACT
+#ifdef CONFIG_NET_SCH_MINIQ
 	struct mini_Qdisc __rcu	*miniq_ingress;
 #endif
 	struct netdev_queue __rcu *ingress_queue;
@@ -1867,7 +1868,7 @@ struct net_device {
 #ifdef CONFIG_XPS
 	struct xps_dev_maps __rcu *xps_maps;
 #endif
-#ifdef CONFIG_NET_CLS_ACT
+#ifdef CONFIG_NET_SCH_MINIQ
 	struct mini_Qdisc __rcu	*miniq_egress;
 #endif
 

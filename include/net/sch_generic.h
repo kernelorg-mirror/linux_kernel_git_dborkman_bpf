@@ -17,7 +17,10 @@
 
 struct Qdisc_ops;
 struct qdisc_walker;
+struct mini_Qdisc;
+struct mini_Qdisc_pair;
 struct tcf_walker;
+struct bpf_prog;
 struct module;
 
 struct qdisc_rate_table {
@@ -194,6 +197,8 @@ struct Qdisc_ops {
 
 	int			(*init)(struct Qdisc *sch, struct nlattr *arg,
 					struct netlink_ext_ack *extack);
+	void			(*set_miniq_cbs)(struct Qdisc *qdisc,
+						 struct mini_Qdisc_pair *miniqp);
 	void			(*reset)(struct Qdisc *);
 	void			(*destroy)(struct Qdisc *);
 	int			(*change)(struct Qdisc *sch,
@@ -522,7 +527,7 @@ static inline void skb_reset_tc(struct sk_buff *skb)
 
 static inline bool skb_at_tc_ingress(const struct sk_buff *skb)
 {
-#ifdef CONFIG_NET_CLS_ACT
+#ifdef CONFIG_NET_SCH_MINIQ
 	return skb->tc_at_ingress;
 #else
 	return false;
@@ -1008,13 +1013,20 @@ static inline void psched_ratecfg_getrate(struct tc_ratespec *res,
 	res->linklayer = (r->linklayer & TC_LINKLAYER_MASK);
 }
 
+typedef void mini_Qdisc_rcu_t(struct mini_Qdisc *miniq);
+
 /* Mini Qdisc serves for specific needs of ingress/clsact Qdisc.
  * The fast path only needs to access filter list and to update stats
  */
 struct mini_Qdisc {
-	struct tcf_proto *filter_list;
+	/* Fast-path */
+	struct tcf_proto *tp_list;
+	void *entry;
+	bool single;
 	struct gnet_stats_basic_cpu __percpu *cpu_bstats;
 	struct gnet_stats_queue	__percpu *cpu_qstats;
+	/* Slow-path */
+	mini_Qdisc_rcu_t *rcu_cb;
 	struct rcu_head rcu;
 };
 
@@ -1035,9 +1047,30 @@ struct mini_Qdisc_pair {
 	struct mini_Qdisc __rcu **p_miniq;
 };
 
+static inline
+void mini_qdisc_pair_set_cbs(struct mini_Qdisc_pair *miniqp,
+			     mini_Qdisc_rcu_t *rcu_cb)
+{
+	miniqp->miniq1.rcu_cb = rcu_cb;
+	miniqp->miniq2.rcu_cb = rcu_cb;
+}
+
+static inline
+struct mini_Qdisc *mini_qdisc_get_active(struct mini_Qdisc_pair *miniqp)
+{
+	return rtnl_dereference(*miniqp->p_miniq);
+}
+
+static inline void mini_qdisc_set_active(struct mini_Qdisc_pair *miniqp,
+					 struct mini_Qdisc *miniq)
+{
+	rcu_assign_pointer(*miniqp->p_miniq, miniq);
+}
+
 void mini_qdisc_pair_swap(struct mini_Qdisc_pair *miniqp,
-			  struct tcf_proto *tp_head);
+			  struct tcf_proto *tp_head, void *entry, bool single);
 void mini_qdisc_pair_init(struct mini_Qdisc_pair *miniqp, struct Qdisc *qdisc,
 			  struct mini_Qdisc __rcu **p_miniq);
+void mini_qdisc_pair_destroy(void);
 
 #endif

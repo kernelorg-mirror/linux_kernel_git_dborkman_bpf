@@ -1315,36 +1315,36 @@ EXPORT_SYMBOL(psched_ratecfg_precompute);
 
 static void mini_qdisc_rcu_func(struct rcu_head *head)
 {
+	struct mini_Qdisc *miniq = container_of(head, struct mini_Qdisc, rcu);
+
+	if (miniq->rcu_cb)
+		miniq->rcu_cb(miniq);
 }
 
 void mini_qdisc_pair_swap(struct mini_Qdisc_pair *miniqp,
-			  struct tcf_proto *tp_head)
+			  struct tcf_proto *tp_head, void *entry, bool single)
 {
-	struct mini_Qdisc *miniq_old = rtnl_dereference(*miniqp->p_miniq);
-	struct mini_Qdisc *miniq;
+	struct mini_Qdisc *miniq_old = mini_qdisc_get_active(miniqp);
+	struct mini_Qdisc *miniq = NULL;
 
-	if (!tp_head) {
-		RCU_INIT_POINTER(*miniqp->p_miniq, NULL);
-		/* Wait for flying RCU callback before it is freed. */
-		rcu_barrier_bh();
-		return;
-	}
-
-	miniq = !miniq_old || miniq_old == &miniqp->miniq2 ?
-		&miniqp->miniq1 : &miniqp->miniq2;
-
-	/* We need to make sure that readers won't see the miniq
-	 * we are about to modify. So wait until previous call_rcu_bh callback
-	 * is done.
+	/* We need to make sure that readers won't see the miniq we are about
+	 * to modify. So wait until previous call_rcu_bh callback is done.
 	 */
 	rcu_barrier_bh();
-	miniq->filter_list = tp_head;
-	rcu_assign_pointer(*miniqp->p_miniq, miniq);
+	if (tp_head || entry) {
+		miniq = !miniq_old || miniq_old == &miniqp->miniq2 ?
+			&miniqp->miniq1 : &miniqp->miniq2;
+		miniq->tp_list = tp_head;
+		miniq->single = single;
+		miniq->entry = entry;
+	}
+
+	mini_qdisc_set_active(miniqp, miniq);
 
 	if (miniq_old)
-		/* This is counterpart of the rcu barriers above. We need to
-		 * block potential new user of miniq_old until all readers
-		 * are not seeing it.
+		/* This is counterpart of the rcu barrier above. We need to
+		 * block potential new user of miniq_old until all readers in
+		 * sch_handle_ingress()/sch_handle_egress() are not seeing it.
 		 */
 		call_rcu_bh(&miniq_old->rcu, mini_qdisc_rcu_func);
 }
@@ -1355,8 +1355,22 @@ void mini_qdisc_pair_init(struct mini_Qdisc_pair *miniqp, struct Qdisc *qdisc,
 {
 	miniqp->miniq1.cpu_bstats = qdisc->cpu_bstats;
 	miniqp->miniq1.cpu_qstats = qdisc->cpu_qstats;
+
 	miniqp->miniq2.cpu_bstats = qdisc->cpu_bstats;
 	miniqp->miniq2.cpu_qstats = qdisc->cpu_qstats;
+
+	if (qdisc->ops->set_miniq_cbs)
+		qdisc->ops->set_miniq_cbs(qdisc, miniqp);
+
 	miniqp->p_miniq = p_miniq;
 }
 EXPORT_SYMBOL(mini_qdisc_pair_init);
+
+void mini_qdisc_pair_destroy(void)
+{
+	/* Wait for any outstanding mini_qdisc_rcu_func() before we
+	 * free the full qdisc eventually.
+	 */
+	rcu_barrier_bh();
+}
+EXPORT_SYMBOL(mini_qdisc_pair_destroy);

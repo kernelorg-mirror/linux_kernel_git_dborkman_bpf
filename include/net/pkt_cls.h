@@ -753,6 +753,12 @@ struct tc_cls_bpf_offload {
 	bool exts_integrated;
 };
 
+struct tc_bpf_offload {
+	struct bpf_prog *prog;
+	struct bpf_prog *oldprog;
+	struct netlink_ext_ack *extack;
+};
+
 struct tc_mqprio_qopt_offload {
 	/* struct tc_mqprio_qopt must always be the first element */
 	struct tc_mqprio_qopt qopt;
