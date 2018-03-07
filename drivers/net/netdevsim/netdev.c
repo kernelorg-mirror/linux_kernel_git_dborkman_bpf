@@ -262,6 +262,14 @@ nsim_setup_tc_block(struct net_device *dev, struct tc_block_offload *f)
 	}
 }
 
+static int
+nsim_setup_tc_bpf(struct net_device *dev, struct tc_bpf_offload *req)
+{
+	struct netdevsim *ns = netdev_priv(dev);
+
+	return nsim_bpf_setup_tc(ns, req->prog, req->oldprog, req->extack);
+}
+
 static int nsim_set_vf_mac(struct net_device *dev, int vf, u8 *mac)
 {
 	struct netdevsim *ns = netdev_priv(dev);
@@ -385,6 +393,8 @@ nsim_setup_tc(struct net_device *dev, enum tc_setup_type type, void *type_data)
 	switch (type) {
 	case TC_SETUP_BLOCK:
 		return nsim_setup_tc_block(dev, type_data);
+	case TC_SETUP_BPF:
+		return nsim_setup_tc_bpf(dev, type_data);
 	default:
 		return -EOPNOTSUPP;
 	}
