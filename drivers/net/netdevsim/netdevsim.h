@@ -75,6 +75,9 @@ int nsim_bpf(struct net_device *dev, struct netdev_bpf *bpf);
 int nsim_bpf_disable_tc(struct netdevsim *ns);
 int nsim_bpf_setup_tc_block_cb(enum tc_setup_type type,
 			       void *type_data, void *cb_priv);
+int nsim_bpf_setup_tc(struct netdevsim *ns, struct bpf_prog *prog,
+		      struct bpf_prog *oldprog,
+		      struct netlink_ext_ack *extack);
 #else
 static inline int nsim_bpf_init(struct netdevsim *ns)
 {
@@ -98,6 +101,13 @@ static inline int nsim_bpf_disable_tc(struct netdevsim *ns)
 static inline int
 nsim_bpf_setup_tc_block_cb(enum tc_setup_type type, void *type_data,
 			   void *cb_priv)
+{
+	return -EOPNOTSUPP;
+}
+
+static inline int
+nsim_bpf_setup_tc(struct netdevsim *ns, struct bpf_prog *prog,
+		  struct bpf_prog *oldprog, struct netlink_ext_ack *extack)
 {
 	return -EOPNOTSUPP;
 }
