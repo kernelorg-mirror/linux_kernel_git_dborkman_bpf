@@ -97,9 +97,8 @@ static int cls_bpf_classify(struct sk_buff *skb, const struct tcf_proto *tp,
 
 		qdisc_skb_cb(skb)->tc_classid = prog->res.classid;
 
-		if (tc_skip_sw(prog->gen_flags)) {
-			filter_res = prog->exts_integrated ? TC_ACT_UNSPEC : 0;
-		} else if (at_ingress) {
+		/* There's no offload for !prog->exts_integrated. */
+		if (at_ingress) {
 			/* It is safe to push/pull even if skb_shared() */
 			__skb_push(skb, skb->mac_len);
 			bpf_compute_data_pointers(skb);
