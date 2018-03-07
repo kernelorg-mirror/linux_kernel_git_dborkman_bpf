@@ -328,6 +328,19 @@ struct bpf_prog_array {
 
 struct bpf_prog_array __rcu *bpf_prog_array_alloc(u32 prog_cnt, gfp_t flags);
 void bpf_prog_array_free(struct bpf_prog_array __rcu *progs);
+
+static inline struct bpf_prog_array *
+bpf_prog_array_alloc_no_rcu(u32 prog_cnt, gfp_t flags)
+{
+	return (__force struct bpf_prog_array *)bpf_prog_array_alloc(prog_cnt,
+								     flags);
+}
+
+static inline void bpf_prog_array_free_no_rcu(struct bpf_prog_array *progs)
+{
+	bpf_prog_array_free((__force struct bpf_prog_array __rcu *)progs);
+}
+
 int bpf_prog_array_length(struct bpf_prog_array __rcu *progs);
 int bpf_prog_array_copy_to_user(struct bpf_prog_array __rcu *progs,
 				__u32 __user *prog_ids, u32 cnt);

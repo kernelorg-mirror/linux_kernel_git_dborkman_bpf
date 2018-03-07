@@ -1549,6 +1549,7 @@ struct bpf_prog_array __rcu *bpf_prog_array_alloc(u32 prog_cnt, gfp_t flags)
 
 	return &empty_prog_array.hdr;
 }
+EXPORT_SYMBOL_GPL(bpf_prog_array_alloc);
 
 void bpf_prog_array_free(struct bpf_prog_array __rcu *progs)
 {
@@ -1557,6 +1558,7 @@ void bpf_prog_array_free(struct bpf_prog_array __rcu *progs)
 		return;
 	kfree_rcu(progs, rcu);
 }
+EXPORT_SYMBOL_GPL(bpf_prog_array_free);
 
 int bpf_prog_array_length(struct bpf_prog_array __rcu *progs)
 {
