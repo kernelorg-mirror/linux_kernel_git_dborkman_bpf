@@ -2747,8 +2747,8 @@ F:	kernel/trace/bpf_trace.c
 F:	lib/test_bpf.c
 F:	net/bpf/
 F:	net/core/filter.c
-F:	net/sched/act_bpf.c
-F:	net/sched/cls_bpf.c
+F:	net/sched/*_bpf.c
+F:	net/sched/sch_miniact.c
 F:	samples/bpf/
 F:	tools/bpf/
 F:	tools/testing/selftests/bpf/
