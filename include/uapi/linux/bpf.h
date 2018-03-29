@@ -757,7 +757,8 @@ union bpf_attr {
 	FN(perf_prog_read_value),	\
 	FN(getsockopt),			\
 	FN(override_return),		\
-	FN(sock_ops_cb_flags_set),
+	FN(sock_ops_cb_flags_set),	\
+	FN(redirect_peer),
 
 /* integer value in 'imm' field of BPF_CALL instruction selects which helper
  * function eBPF program intends to call

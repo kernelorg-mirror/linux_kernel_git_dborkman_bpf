@@ -1763,6 +1763,16 @@ static int __bpf_redirect(struct sk_buff *skb, struct net_device *dev,
 		return __bpf_redirect_no_mac(skb, dev, flags);
 }
 
+static int __bpf_switch_dev(struct sk_buff *skb, struct net_device *dev)
+{
+	bool xnet = !net_eq(dev_net(skb->dev), dev_net(dev));
+
+	skb_scrub_packet(skb, xnet);
+	skb->dev = dev;
+
+	return NET_ANOTHER;
+}
+
 BPF_CALL_3(bpf_clone_redirect, struct sk_buff *, skb, u32, ifindex, u64, flags)
 {
 	struct net_device *dev;
@@ -1805,41 +1815,78 @@ static const struct bpf_func_proto bpf_clone_redirect_proto = {
 
 struct redirect_info {
 	u32 ifindex;
+	u32 peer_id;
 	u32 flags;
 	struct bpf_map *map;
 	struct bpf_map *map_to_flush;
 	unsigned long   map_owner;
 };
 
+#define BPF_F_DIRECT	(1U << 1)
+
 static DEFINE_PER_CPU(struct redirect_info, redirect_info);
 
-BPF_CALL_2(bpf_redirect, u32, ifindex, u64, flags)
+static int bpf_set_redirect_info(u32 ifindex, u32 peer_id, u32 flags)
 {
 	struct redirect_info *ri = this_cpu_ptr(&redirect_info);
 
-	if (unlikely(flags & ~(BPF_F_INGRESS)))
-		return TC_ACT_SHOT;
-
 	ri->ifindex = ifindex;
+	ri->peer_id = peer_id;
 	ri->flags = flags;
 
 	return TC_ACT_REDIRECT;
 }
 
+BPF_CALL_3(bpf_redirect_peer, u32, ifindex, u32, peer_id, u64, flags)
+{
+	if (unlikely(flags))
+		return TC_ACT_SHOT;
+
+	return bpf_set_redirect_info(ifindex, peer_id, BPF_F_DIRECT);
+}
+
+BPF_CALL_2(bpf_redirect, u32, ifindex, u64, flags)
+{
+	if (unlikely(flags & ~(BPF_F_INGRESS)))
+		return TC_ACT_SHOT;
+
+	return bpf_set_redirect_info(ifindex, 0, flags);
+}
+
 int skb_do_redirect(struct sk_buff *skb)
 {
 	struct redirect_info *ri = this_cpu_ptr(&redirect_info);
+	bool direct = ri->flags & BPF_F_DIRECT;
+	struct net *net = dev_net(skb->dev);
 	struct net_device *dev;
 
-	dev = dev_get_by_index_rcu(dev_net(skb->dev), ri->ifindex);
+	if (direct) {
+		net = get_net_ns_by_id(net, ri->peer_id);
+		if (unlikely(!net)) {
+			kfree_skb(skb);
+			return -EINVAL;
+		}
+	}
+
+	dev = dev_get_by_index_rcu(net, ri->ifindex);
 	ri->ifindex = 0;
 	if (unlikely(!dev)) {
 		kfree_skb(skb);
 		return -EINVAL;
 	}
 
-	return __bpf_redirect(skb, dev, ri->flags);
+	return direct ? __bpf_switch_dev(skb, dev) :
+			__bpf_redirect(skb, dev, ri->flags);
 }
+
+static const struct bpf_func_proto bpf_redirect_peer_proto = {
+	.func           = bpf_redirect_peer,
+	.gpl_only       = false,
+	.ret_type       = RET_INTEGER,
+	.arg1_type      = ARG_ANYTHING,
+	.arg2_type      = ARG_ANYTHING,
+	.arg3_type      = ARG_ANYTHING,
+};
 
 static const struct bpf_func_proto bpf_redirect_proto = {
 	.func           = bpf_redirect,
@@ -3501,6 +3548,8 @@ tc_cls_act_func_proto(enum bpf_func_id func_id)
 		return bpf_get_skb_set_tunnel_proto(func_id);
 	case BPF_FUNC_redirect:
 		return &bpf_redirect_proto;
+	case BPF_FUNC_redirect_peer:
+		return &bpf_redirect_peer_proto;
 	case BPF_FUNC_get_route_realm:
 		return &bpf_get_route_realm_proto;
 	case BPF_FUNC_get_hash_recalc:

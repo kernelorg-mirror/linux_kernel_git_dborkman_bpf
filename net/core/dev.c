@@ -3316,7 +3316,8 @@ EXPORT_SYMBOL(dev_loopback_xmit);
 
 #ifdef CONFIG_NET_EGRESS
 static struct sk_buff *
-sch_handle_egress(struct sk_buff *skb, int *ret, struct net_device *dev)
+sch_handle_egress(struct sk_buff *skb, int *ret, struct net_device *dev,
+		  bool *another)
 {
 	struct mini_Qdisc *miniq = rcu_dereference_bh(dev->miniq_egress);
 	struct tcf_result cl_res;
@@ -3345,7 +3346,10 @@ sch_handle_egress(struct sk_buff *skb, int *ret, struct net_device *dev)
 		return NULL;
 	case TC_ACT_REDIRECT:
 		/* No need to push/pop skb's mac_header here on egress! */
-		skb_do_redirect(skb);
+		if (skb_do_redirect(skb) == NET_ANOTHER) {
+			*another = true;
+			break;
+		}
 		*ret = NET_XMIT_SUCCESS;
 		return NULL;
 	default:
@@ -3494,10 +3498,17 @@ static int __dev_queue_xmit(struct sk_buff *skb, void *accel_priv)
 #ifdef CONFIG_NET_CLS_ACT
 	skb->tc_at_ingress = 0;
 # ifdef CONFIG_NET_EGRESS
+another_round:
 	if (static_key_false(&egress_needed)) {
-		skb = sch_handle_egress(skb, &rc, dev);
+		bool another = false;
+
+		skb = sch_handle_egress(skb, &rc, dev, &another);
 		if (!skb)
 			goto out;
+		if (another) {
+			dev = skb->dev;
+			goto another_round;
+		}
 	}
 # endif
 #endif
@@ -4262,7 +4273,7 @@ EXPORT_SYMBOL_GPL(br_fdb_test_addr_hook);
 
 static inline struct sk_buff *
 sch_handle_ingress(struct sk_buff *skb, struct packet_type **pt_prev, int *ret,
-		   struct net_device *orig_dev)
+		   struct net_device *orig_dev, bool *another)
 {
 #ifdef CONFIG_NET_CLS_ACT
 	struct mini_Qdisc *miniq = rcu_dereference_bh(skb->dev->miniq_ingress);
@@ -4305,7 +4316,11 @@ sch_handle_ingress(struct sk_buff *skb, struct packet_type **pt_prev, int *ret,
 		 * redirecting to another netdev
 		 */
 		__skb_push(skb, skb->mac_len);
-		skb_do_redirect(skb);
+		if (skb_do_redirect(skb) == NET_ANOTHER) {
+			__skb_pull(skb, skb->mac_len);
+			*another = true;
+			break;
+		}
 		return NULL;
 	default:
 		break;
@@ -4478,10 +4493,14 @@ another_round:
 skip_taps:
 #ifdef CONFIG_NET_INGRESS
 	if (static_key_false(&ingress_needed)) {
-		skb = sch_handle_ingress(skb, &pt_prev, &ret, orig_dev);
+		bool another = false;
+
+		skb = sch_handle_ingress(skb, &pt_prev, &ret, orig_dev,
+					 &another);
 		if (!skb)
 			goto out;
-
+		if (another)
+			goto another_round;
 		if (nf_ingress(skb, &pt_prev, &ret, orig_dev) < 0)
 			goto out;
 	}
