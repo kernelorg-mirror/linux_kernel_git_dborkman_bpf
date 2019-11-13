@@ -1482,6 +1482,11 @@ struct bpf_prog *bpf_prog_inc(struct bpf_prog *prog)
 }
 EXPORT_SYMBOL_GPL(bpf_prog_inc);
 
+bool bpf_prog_under_eviction(struct bpf_prog *prog)
+{
+	return atomic_read(&prog->aux->refcnt) == 0;
+}
+
 /* prog_idr_lock should have been held */
 struct bpf_prog *bpf_prog_inc_not_zero(struct bpf_prog *prog)
 {
