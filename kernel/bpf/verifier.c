@@ -171,6 +171,9 @@ struct bpf_verifier_stack_elem {
 #define BPF_COMPLEXITY_LIMIT_JMP_SEQ	8192
 #define BPF_COMPLEXITY_LIMIT_STATES	64
 
+#define BPF_MAP_KEY_POISON	(1ULL << 63)
+#define BPF_MAP_KEY_SEEN	(1ULL << 62)
+
 #define BPF_MAP_PTR_UNPRIV	1UL
 #define BPF_MAP_PTR_POISON	((void *)((0xeB9FUL << 1) +	\
 					  POISON_POINTER_DELTA))
@@ -193,6 +196,29 @@ static void bpf_map_ptr_store(struct bpf_insn_aux_data *aux,
 	unpriv |= bpf_map_ptr_unpriv(aux);
 	aux->map_state = (unsigned long)map |
 			 (unpriv ? BPF_MAP_PTR_UNPRIV : 0UL);
+}
+
+static bool bpf_map_key_poisoned(const struct bpf_insn_aux_data *aux)
+{
+	return aux->key_state & BPF_MAP_KEY_POISON;
+}
+
+static bool bpf_map_key_unseen(const struct bpf_insn_aux_data *aux)
+{
+	return !(aux->key_state & BPF_MAP_KEY_SEEN);
+}
+
+static u64 bpf_map_key_immediate(const struct bpf_insn_aux_data *aux)
+{
+	return aux->key_state & ~BPF_MAP_KEY_SEEN;
+}
+
+static void bpf_map_key_store(struct bpf_insn_aux_data *aux, u64 state)
+{
+	bool poisoned = bpf_map_key_poisoned(aux);
+
+	aux->key_state = state | BPF_MAP_KEY_SEEN |
+			 (poisoned ? BPF_MAP_KEY_POISON : 0ULL);
 }
 
 struct bpf_call_arg_meta {
@@ -4088,6 +4114,39 @@ record_func_map(struct bpf_verifier_env *env, struct bpf_call_arg_meta *meta,
 	return 0;
 }
 
+static int
+record_func_key(struct bpf_verifier_env *env, struct bpf_call_arg_meta *meta,
+		int func_id, int insn_idx)
+{
+	struct bpf_insn_aux_data *aux = &env->insn_aux_data[insn_idx];
+	struct bpf_reg_state *regs = cur_regs(env), *reg;
+	struct tnum range = tnum_range(0, U32_MAX);
+	struct bpf_map *map = meta->map_ptr;
+	u64 val;
+
+	if (func_id != BPF_FUNC_tail_call)
+		return 0;
+	if (!map) {
+		verbose(env, "kernel subsystem misconfigured verifier\n");
+		return -EINVAL;
+	}
+	if (map->map_type != BPF_MAP_TYPE_PROG_ARRAY)
+		return 0;
+
+	reg = &regs[BPF_REG_3];
+	if (!register_is_const(reg) || !tnum_in(range, reg->var_off)) {
+		bpf_map_key_store(aux, BPF_MAP_KEY_POISON);
+		return 0;
+	}
+
+	val = reg->var_off.value;
+	if (bpf_map_key_unseen(aux))
+		bpf_map_key_store(aux, val);
+	else if (bpf_map_key_immediate(aux) != val)
+		bpf_map_key_store(aux, BPF_MAP_KEY_POISON);
+	return 0;
+}
+
 static int check_reference_leak(struct bpf_verifier_env *env)
 {
 	struct bpf_func_state *state = cur_func(env);
@@ -4159,6 +4218,10 @@ static int check_helper_call(struct bpf_verifier_env *env, int func_id, int insn
 	}
 
 	err = record_func_map(env, &meta, func_id, insn_idx);
+	if (err)
+		return err;
+
+	err = record_func_key(env, &meta, func_id, insn_idx);
 	if (err)
 		return err;
 
@@ -9202,6 +9265,43 @@ static int fixup_bpf_calls(struct bpf_verifier_env *env)
 			insn->code = BPF_JMP | BPF_TAIL_CALL;
 
 			aux = &env->insn_aux_data[i + delta];
+			if (prog->jit_requested &&
+			    !bpf_map_key_poisoned(aux) &&
+			    !bpf_map_ptr_poisoned(aux) &&
+			    !bpf_map_ptr_unpriv(aux)) {
+				struct bpf_jit_poke_descriptor desc;
+				u32 map_key;
+				int ret;
+
+				map_key = bpf_map_key_immediate(aux);
+				map_ptr = BPF_MAP_PTR(aux->map_state);
+
+				if (map_key >= map_ptr->max_entries)
+					continue;
+				if (!map_ptr->ops->map_poke_track) {
+					verbose(env, "bpf verifier is misconfigured\n");
+					return -EINVAL;
+				}
+
+				memset(&desc, 0, sizeof(desc));
+				desc.reason = BPF_POKE_REASON_TAIL_CALL;
+				desc.tc.map = map_ptr;
+				desc.tc.key = map_key;
+
+				ret = bpf_jit_add_poke_descriptor(prog, &desc);
+				if (ret < 0) {
+					verbose(env, "adding tail call poke descriptor failed\n");
+					return ret;
+				}
+
+				insn->imm = ret + 1;
+
+				ret = map_ptr->ops->map_poke_track(map_ptr, prog->aux);
+				if (ret < 0) {
+					verbose(env, "tracking tail call prog failed\n");
+					return ret;
+				}
+			}
 			if (!bpf_map_ptr_unpriv(aux))
 				continue;
 
