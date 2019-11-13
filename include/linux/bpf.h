@@ -21,6 +21,7 @@ struct bpf_verifier_env;
 struct bpf_verifier_log;
 struct perf_event;
 struct bpf_prog;
+struct bpf_prog_aux;
 struct bpf_map;
 struct sock;
 struct seq_file;
@@ -62,6 +63,12 @@ struct bpf_map_ops {
 			     const struct btf *btf,
 			     const struct btf_type *key_type,
 			     const struct btf_type *value_type);
+
+	/* Prog poke tracking helpers. */
+	int (*map_poke_track)(struct bpf_map *map, struct bpf_prog_aux *aux);
+	void (*map_poke_untrack)(struct bpf_map *map, struct bpf_prog_aux *aux);
+	void (*map_poke_run)(struct bpf_map *map, u32 key, struct bpf_prog *old,
+			     struct bpf_prog *new);
 
 	/* Direct value access helpers. */
 	int (*map_direct_value_addr)(const struct bpf_map *map,
@@ -584,6 +591,9 @@ struct bpf_array_aux {
 	 */
 	enum bpf_prog_type type;
 	bool jited;
+	/* Programs with direct jumps into programs part of this array. */
+	struct list_head poke_progs;
+	struct mutex poke_mutex;
 };
 
 struct bpf_array {
@@ -1324,5 +1334,31 @@ enum bpf_text_poke_type {
 
 int bpf_arch_text_poke(void *ip, enum bpf_text_poke_type t,
 		       void *addr1, void *addr2);
+
+static inline void bpf_map_poke_lock(struct bpf_map *map)
+	__acquires(&container_of(map, struct bpf_array, map)->aux->poke_mutex)
+{
+#ifdef CONFIG_BPF_SYSCALL
+	struct bpf_array_aux *aux;
+
+	aux = container_of(map, struct bpf_array, map)->aux;
+	if (aux)
+		mutex_lock(&aux->poke_mutex);
+#endif
+	__acquire(&aux->poke_mutex);
+}
+
+static inline void bpf_map_poke_unlock(struct bpf_map *map)
+	__releases(&container_of(map, struct bpf_array, map)->aux->poke_mutex)
+{
+#ifdef CONFIG_BPF_SYSCALL
+	struct bpf_array_aux *aux;
+
+	aux = container_of(map, struct bpf_array, map)->aux;
+	if (aux)
+		mutex_unlock(&aux->poke_mutex);
+#endif
+	__release(&aux->poke_mutex);
+}
 
 #endif /* _LINUX_BPF_H */

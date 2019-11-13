@@ -540,10 +540,14 @@ int bpf_fd_array_map_update_elem(struct bpf_map *map, struct file *map_file,
 	if (IS_ERR(new_ptr))
 		return PTR_ERR(new_ptr);
 
+	bpf_map_poke_lock(map);
 	old_ptr = xchg(array->ptrs + index, new_ptr);
+	if (map->ops->map_poke_run)
+		map->ops->map_poke_run(map, index, old_ptr, new_ptr);
+	bpf_map_poke_unlock(map);
+
 	if (old_ptr)
 		map->ops->map_fd_put_ptr(old_ptr);
-
 	return 0;
 }
 
@@ -556,7 +560,12 @@ static int fd_array_map_delete_elem(struct bpf_map *map, void *key)
 	if (index >= array->map.max_entries)
 		return -E2BIG;
 
+	bpf_map_poke_lock(map);
 	old_ptr = xchg(array->ptrs + index, NULL);
+	if (map->ops->map_poke_run)
+		map->ops->map_poke_run(map, index, old_ptr, NULL);
+	bpf_map_poke_unlock(map);
+
 	if (old_ptr) {
 		map->ops->map_fd_put_ptr(old_ptr);
 		return 0;
@@ -625,6 +634,104 @@ static void prog_array_map_seq_show_elem(struct bpf_map *map, void *key,
 	rcu_read_unlock();
 }
 
+struct prog_poke_elem {
+	struct list_head list;
+	struct bpf_prog_aux *aux;
+};
+
+static int prog_array_map_poke_track(struct bpf_map *map,
+				     struct bpf_prog_aux *prog_aux)
+{
+	struct bpf_array_aux *aux;
+	struct prog_poke_elem *elem;
+
+	elem = kmalloc(sizeof(*elem), GFP_KERNEL);
+	if (!elem)
+		return -ENOMEM;
+
+	INIT_LIST_HEAD(&elem->list);
+	elem->aux = prog_aux;
+
+	aux = container_of(map, struct bpf_array, map)->aux;
+	mutex_lock(&aux->poke_mutex);
+	list_add_tail(&elem->list, &aux->poke_progs);
+	mutex_unlock(&aux->poke_mutex);
+	return 0;
+}
+
+static void prog_array_map_poke_untrack(struct bpf_map *map,
+					struct bpf_prog_aux *prog_aux)
+{
+	struct prog_poke_elem *elem, *tmp;
+	struct bpf_array_aux *aux;
+
+	aux = container_of(map, struct bpf_array, map)->aux;
+	mutex_lock(&aux->poke_mutex);
+	list_for_each_entry_safe(elem, tmp, &aux->poke_progs, list) {
+		if (elem->aux == prog_aux) {
+			list_del_init(&elem->list);
+			kfree(elem);
+		}
+	}
+	mutex_unlock(&aux->poke_mutex);
+}
+
+static void prog_array_map_poke_run(struct bpf_map *map, u32 key,
+				    struct bpf_prog *old,
+				    struct bpf_prog *new)
+{
+	enum bpf_text_poke_type type;
+	struct prog_poke_elem *elem;
+	struct bpf_array_aux *aux;
+
+	if (!old && new)
+		type = BPF_MOD_NOP_TO_JUMP;
+	else if (old && !new)
+		type = BPF_MOD_JUMP_TO_NOP;
+	else if (old && new)
+		type = BPF_MOD_JUMP_TO_JUMP;
+	else
+		return;
+
+	aux = container_of(map, struct bpf_array, map)->aux;
+	list_for_each_entry(elem, &aux->poke_progs, list) {
+		struct bpf_prog *prog = elem->aux->prog;
+		struct bpf_jit_poke_descriptor *poke;
+		int i, ret;
+
+		/* The prog's kallsym entry was removed out of RCU callback,
+		 * but we can only untrack from sleepable context, therefore
+		 * bpf_arch_text_poke() might not see that this is in BPF text
+		 * section. Given these programs are unreachable, we can skip
+		 * them here. Also programs reaching refcount of zero while
+		 * patching is in progress is okay since we're protected under
+		 * poke_mutex and untrack the programs before the JIT buffer
+		 * is freed. If that happens and if also the RCU callback did
+		 * remove the kallsyms entry in the meantime, bpf_arch_text_poke()
+		 * will bail out with -EINVAL without patching, which is totally
+		 * fine. Any other error happening at that point is a bug.
+		 */
+		if (bpf_prog_under_eviction(prog))
+			continue;
+		for (i = 0; i < prog->aux->size_poke_tab; i++) {
+			poke = &prog->aux->poke_tab[i];
+			if (!READ_ONCE(poke->ip_stable))
+				continue;
+			if (poke->reason != BPF_POKE_REASON_TAIL_CALL)
+				continue;
+			if (poke->tc.map != map || poke->tc.key != key)
+				continue;
+			ret = bpf_arch_text_poke(poke->ip, type,
+						 old ? (u8 *)old->bpf_func +
+						 poke->adj_off : NULL,
+						 new ? (u8 *)new->bpf_func +
+						 poke->adj_off : NULL);
+			/* See comment above. */
+			BUG_ON(ret < 0 && ret != -EINVAL);
+		}
+	}
+}
+
 static struct bpf_map *prog_array_map_alloc(union bpf_attr *attr)
 {
 	struct bpf_array_aux *aux;
@@ -633,6 +740,9 @@ static struct bpf_map *prog_array_map_alloc(union bpf_attr *attr)
 	aux = kzalloc(sizeof(*aux), GFP_KERNEL);
 	if (!aux)
 		return ERR_PTR(-ENOMEM);
+
+	INIT_LIST_HEAD(&aux->poke_progs);
+	mutex_init(&aux->poke_mutex);
 
 	map = array_map_alloc(attr);
 	if (IS_ERR(map)) {
@@ -646,9 +756,14 @@ static struct bpf_map *prog_array_map_alloc(union bpf_attr *attr)
 
 static void prog_array_map_free(struct bpf_map *map)
 {
+	struct prog_poke_elem *elem, *tmp;
 	struct bpf_array_aux *aux;
 
 	aux = container_of(map, struct bpf_array, map)->aux;
+	list_for_each_entry_safe(elem, tmp, &aux->poke_progs, list) {
+		list_del_init(&elem->list);
+		kfree(elem);
+	}
 	kfree(aux);
 	fd_array_map_free(map);
 }
@@ -657,6 +772,9 @@ const struct bpf_map_ops prog_array_map_ops = {
 	.map_alloc_check = fd_array_map_alloc_check,
 	.map_alloc = prog_array_map_alloc,
 	.map_free = prog_array_map_free,
+	.map_poke_track = prog_array_map_poke_track,
+	.map_poke_untrack = prog_array_map_poke_untrack,
+	.map_poke_run = prog_array_map_poke_run,
 	.map_get_next_key = array_map_get_next_key,
 	.map_lookup_elem = fd_array_map_lookup_elem,
 	.map_delete_elem = fd_array_map_delete_elem,
