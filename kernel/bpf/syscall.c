@@ -2294,13 +2294,13 @@ static int bpf_map_get_fd_by_id(const union bpf_attr *attr)
 }
 
 static const struct bpf_map *bpf_map_from_imm(const struct bpf_prog *prog,
-					      unsigned long addr, u32 *off,
-					      u32 *type)
+					      unsigned long addr, u32 *idx,
+					      u32 *off, u32 *type)
 {
 	const struct bpf_map *map;
 	int i;
 
-	for (i = 0, *off = 0; i < prog->aux->used_map_cnt; i++) {
+	for (i = 0, *off = *idx = 0; i < prog->aux->used_map_cnt; i++) {
 		map = prog->aux->used_maps[i];
 		if (map == (void *)addr) {
 			*type = BPF_PSEUDO_MAP_FD;
@@ -2308,7 +2308,7 @@ static const struct bpf_map *bpf_map_from_imm(const struct bpf_prog *prog,
 		}
 		if (!map->ops->map_direct_value_meta)
 			continue;
-		if (!map->ops->map_direct_value_meta(map, addr, off)) {
+		if (!map->ops->map_direct_value_meta(map, addr, idx, off)) {
 			*type = BPF_PSEUDO_MAP_VALUE;
 			return map;
 		}
@@ -2321,7 +2321,7 @@ static struct bpf_insn *bpf_insn_prepare_dump(const struct bpf_prog *prog)
 {
 	const struct bpf_map *map;
 	struct bpf_insn *insns;
-	u32 off, type;
+	u32 off, idx, type;
 	u64 imm;
 	int i;
 
@@ -2349,11 +2349,13 @@ static struct bpf_insn *bpf_insn_prepare_dump(const struct bpf_prog *prog)
 			continue;
 
 		imm = ((u64)insns[i + 1].imm << 32) | (u32)insns[i].imm;
-		map = bpf_map_from_imm(prog, imm, &off, &type);
+		map = bpf_map_from_imm(prog, imm, &idx, &off, &type);
 		if (map) {
 			insns[i].src_reg = type;
 			insns[i].imm = map->id;
+			insns[i].off = (u16)idx;
 			insns[i + 1].imm = off;
+			insns[i + 1].off = (u16)(idx >> 16);
 			continue;
 		}
 	}

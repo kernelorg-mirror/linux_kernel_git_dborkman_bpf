@@ -72,9 +72,9 @@ struct bpf_map_ops {
 
 	/* Direct value access helpers. */
 	int (*map_direct_value_addr)(const struct bpf_map *map,
-				     u64 *imm, u32 off);
+				     u64 *imm, u32 idx, u32 off);
 	int (*map_direct_value_meta)(const struct bpf_map *map,
-				     u64 imm, u32 *off);
+				     u64 imm, u32 *idx, u32 *off);
 };
 
 struct bpf_map_memory {

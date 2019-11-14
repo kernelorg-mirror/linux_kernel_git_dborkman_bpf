@@ -152,32 +152,32 @@ static void *array_map_lookup_elem(struct bpf_map *map, void *key)
 }
 
 static int array_map_direct_value_addr(const struct bpf_map *map, u64 *imm,
-				       u32 off)
+				       u32 idx, u32 off)
 {
 	struct bpf_array *array = container_of(map, struct bpf_array, map);
 
-	if (map->max_entries != 1)
-		return -ENOTSUPP;
-	if (off >= map->value_size)
+	if (idx >= map->max_entries || off >= map->value_size)
 		return -EINVAL;
 
-	*imm = (unsigned long)array->value;
+	*imm = (unsigned long)(array->value +
+			       array->elem_size * (idx & array->index_mask));
 	return 0;
 }
 
 static int array_map_direct_value_meta(const struct bpf_map *map, u64 imm,
-				       u32 *off)
+				       u32 *idx, u32 *off)
 {
 	struct bpf_array *array = container_of(map, struct bpf_array, map);
-	u64 base = (unsigned long)array->value;
-	u64 range = array->elem_size;
+	u64 rem, base = (unsigned long)array->value, slot = array->elem_size;
+	u64 range = slot * map->max_entries;
 
-	if (map->max_entries != 1)
-		return -ENOTSUPP;
 	if (imm < base || imm >= base + range)
 		return -ENOENT;
 
-	*off = imm - base;
+	base = imm - base;
+
+	*idx = div64_u64_rem(base, slot, &rem);
+	*off = rem;
 	return 0;
 }
 

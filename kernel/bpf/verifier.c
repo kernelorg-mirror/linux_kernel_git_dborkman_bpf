@@ -2810,9 +2810,10 @@ static int bpf_map_direct_read(struct bpf_map *map, int off, int size, u64 *val)
 	u64 addr;
 	int err;
 
-	err = map->ops->map_direct_value_addr(map, &addr, off);
+	err = map->ops->map_direct_value_addr(map, &addr, 0, off);
 	if (err)
 		return err;
+
 	ptr = (void *)(long)addr + off;
 
 	switch (size) {
@@ -4124,16 +4125,21 @@ record_func_key(struct bpf_verifier_env *env, struct bpf_call_arg_meta *meta,
 	struct bpf_map *map = meta->map_ptr;
 	u64 val;
 
-	if (func_id != BPF_FUNC_tail_call)
+	if (func_id != BPF_FUNC_tail_call &&
+	    func_id != BPF_FUNC_map_lookup_elem)
 		return 0;
+
 	if (!map) {
 		verbose(env, "kernel subsystem misconfigured verifier\n");
 		return -EINVAL;
 	}
-	if (map->map_type != BPF_MAP_TYPE_PROG_ARRAY)
+
+	if (map->map_type != BPF_MAP_TYPE_PROG_ARRAY &&
+	    map->map_type != BPF_MAP_TYPE_ARRAY)
 		return 0;
 
-	reg = &regs[BPF_REG_3];
+	reg = func_id == BPF_FUNC_tail_call ?
+	      &regs[BPF_REG_3] : &regs[BPF_REG_2];
 	if (!register_is_const(reg) || !tnum_in(range, reg->var_off)) {
 		bpf_map_key_store(aux, BPF_MAP_KEY_POISON);
 		return 0;
@@ -8208,7 +8214,7 @@ static int replace_map_fd_with_map_ptr(struct bpf_verifier_env *env)
 					return -EINVAL;
 				}
 
-				err = map->ops->map_direct_value_addr(map, &addr, off);
+				err = map->ops->map_direct_value_addr(map, &addr, 0, off);
 				if (err) {
 					verbose(env, "invalid access to map value pointer, value_size=%u off=%u\n",
 						map->value_size, off);
@@ -9121,7 +9127,8 @@ static int fixup_bpf_calls(struct bpf_verifier_env *env)
 	struct bpf_insn insn_buf[16];
 	struct bpf_prog *new_prog;
 	struct bpf_map *map_ptr;
-	int i, cnt, delta = 0;
+	int ret, i, cnt, delta = 0;
+	u32 map_key;
 
 	for (i = 0; i < insn_cnt; i++, insn++) {
 		if (insn->code == (BPF_ALU64 | BPF_MOD | BPF_X) ||
@@ -9270,8 +9277,6 @@ static int fixup_bpf_calls(struct bpf_verifier_env *env)
 			    !bpf_map_ptr_poisoned(aux) &&
 			    !bpf_map_ptr_unpriv(aux)) {
 				struct bpf_jit_poke_descriptor desc;
-				u32 map_key;
-				int ret;
 
 				map_key = bpf_map_key_immediate(aux);
 				map_ptr = BPF_MAP_PTR(aux->map_state);
@@ -9354,7 +9359,26 @@ static int fixup_bpf_calls(struct bpf_verifier_env *env)
 			ops = map_ptr->ops;
 			if (insn->imm == BPF_FUNC_map_lookup_elem &&
 			    ops->map_gen_lookup) {
-				cnt = ops->map_gen_lookup(map_ptr, insn_buf);
+				u64 addr = 0;
+
+				if (!bpf_map_key_poisoned(aux) &&
+				    ops->map_direct_value_addr) {
+					map_key = bpf_map_key_immediate(aux);
+					ret = ops->map_direct_value_addr(map_ptr,
+									 &addr,
+									 map_key, 0);
+					if (WARN_ON_ONCE(ret < 0 && addr))
+						addr = 0;
+				}
+				if (addr) {
+					struct bpf_insn tmp[] = {
+						BPF_LD_IMM64(BPF_REG_0, addr),
+					};
+					memcpy(insn_buf, tmp, sizeof(tmp));
+					cnt = ARRAY_SIZE(tmp);
+				} else {
+					cnt = ops->map_gen_lookup(map_ptr, insn_buf);
+				}
 				if (cnt == 0 || cnt >= ARRAY_SIZE(insn_buf)) {
 					verbose(env, "bpf verifier is misconfigured\n");
 					return -EINVAL;
