@@ -2099,7 +2099,8 @@ static inline int __bpf_rx_skb_no_mac(struct net_device *dev,
 	return ret;
 }
 
-static inline int __bpf_tx_skb(struct net_device *dev, struct sk_buff *skb)
+static inline int __bpf_tx_skb(struct net_device *dev, struct sk_buff *skb,
+			       u32 flags)
 {
 	int ret;
 
@@ -2110,7 +2111,8 @@ static inline int __bpf_tx_skb(struct net_device *dev, struct sk_buff *skb)
 	}
 
 	skb->dev = dev;
-	skb->tstamp = 0;
+	if (!(flags & BPF_F_TSTAMP_RETAIN))
+		skb->tstamp = 0;
 
 	dev_xmit_recursion_inc();
 	ret = dev_queue_xmit(skb);
@@ -2138,7 +2140,7 @@ static int __bpf_redirect_no_mac(struct sk_buff *skb, struct net_device *dev,
 	skb_pop_mac_header(skb);
 	skb_reset_mac_len(skb);
 	return flags & BPF_F_INGRESS ?
-	       __bpf_rx_skb_no_mac(dev, skb) : __bpf_tx_skb(dev, skb);
+	       __bpf_rx_skb_no_mac(dev, skb) : __bpf_tx_skb(dev, skb, flags);
 }
 
 static int __bpf_redirect_common(struct sk_buff *skb, struct net_device *dev,
@@ -2152,7 +2154,7 @@ static int __bpf_redirect_common(struct sk_buff *skb, struct net_device *dev,
 
 	bpf_push_mac_rcsum(skb);
 	return flags & BPF_F_INGRESS ?
-	       __bpf_rx_skb(dev, skb) : __bpf_tx_skb(dev, skb);
+	       __bpf_rx_skb(dev, skb) : __bpf_tx_skb(dev, skb, flags);
 }
 
 static int __bpf_redirect(struct sk_buff *skb, struct net_device *dev,
@@ -2166,7 +2168,8 @@ static int __bpf_redirect(struct sk_buff *skb, struct net_device *dev,
 
 #if IS_ENABLED(CONFIG_IPV6)
 static int bpf_out_neigh_v6(struct net *net, struct sk_buff *skb,
-			    struct net_device *dev, struct bpf_nh_params *nh)
+			    struct net_device *dev, struct bpf_nh_params *nh,
+			    u32 flags)
 {
 	u32 hh_len = LL_RESERVED_SPACE(dev);
 	const struct in6_addr *nexthop;
@@ -2179,7 +2182,8 @@ static int bpf_out_neigh_v6(struct net *net, struct sk_buff *skb,
 	}
 
 	skb->dev = dev;
-	skb->tstamp = 0;
+	if (!(flags & BPF_F_TSTAMP_RETAIN))
+		skb->tstamp = 0;
 
 	if (unlikely(skb_headroom(skb) < hh_len && dev->header_ops)) {
 		struct sk_buff *skb2;
@@ -2224,7 +2228,7 @@ out_drop:
 }
 
 static int __bpf_redirect_neigh_v6(struct sk_buff *skb, struct net_device *dev,
-				   struct bpf_nh_params *nh)
+				   struct bpf_nh_params *nh, u32 flags)
 {
 	const struct ipv6hdr *ip6h = ipv6_hdr(skb);
 	struct net *net = dev_net(dev);
@@ -2251,7 +2255,7 @@ static int __bpf_redirect_neigh_v6(struct sk_buff *skb, struct net_device *dev,
 		goto out_drop;
 	}
 
-	err = bpf_out_neigh_v6(net, skb, dev, nh);
+	err = bpf_out_neigh_v6(net, skb, dev, nh, flags);
 	if (unlikely(net_xmit_eval(err)))
 		dev->stats.tx_errors++;
 	else
@@ -2265,7 +2269,7 @@ out_xmit:
 }
 #else
 static int __bpf_redirect_neigh_v6(struct sk_buff *skb, struct net_device *dev,
-				   struct bpf_nh_params *nh)
+				   struct bpf_nh_params *nh, u32 flags)
 {
 	kfree_skb(skb);
 	return NET_XMIT_DROP;
@@ -2274,7 +2278,8 @@ static int __bpf_redirect_neigh_v6(struct sk_buff *skb, struct net_device *dev,
 
 #if IS_ENABLED(CONFIG_INET)
 static int bpf_out_neigh_v4(struct net *net, struct sk_buff *skb,
-			    struct net_device *dev, struct bpf_nh_params *nh)
+			    struct net_device *dev, struct bpf_nh_params *nh,
+			    u32 flags)
 {
 	u32 hh_len = LL_RESERVED_SPACE(dev);
 	struct neighbour *neigh;
@@ -2286,7 +2291,8 @@ static int bpf_out_neigh_v4(struct net *net, struct sk_buff *skb,
 	}
 
 	skb->dev = dev;
-	skb->tstamp = 0;
+	if (!(flags & BPF_F_TSTAMP_RETAIN))
+		skb->tstamp = 0;
 
 	if (unlikely(skb_headroom(skb) < hh_len && dev->header_ops)) {
 		struct sk_buff *skb2;
@@ -2335,7 +2341,7 @@ out_drop:
 }
 
 static int __bpf_redirect_neigh_v4(struct sk_buff *skb, struct net_device *dev,
-				   struct bpf_nh_params *nh)
+				   struct bpf_nh_params *nh, u32 flags)
 {
 	const struct iphdr *ip4h = ip_hdr(skb);
 	struct net *net = dev_net(dev);
@@ -2364,7 +2370,7 @@ static int __bpf_redirect_neigh_v4(struct sk_buff *skb, struct net_device *dev,
 		skb_dst_set(skb, &rt->dst);
 	}
 
-	err = bpf_out_neigh_v4(net, skb, dev, nh);
+	err = bpf_out_neigh_v4(net, skb, dev, nh, flags);
 	if (unlikely(net_xmit_eval(err)))
 		dev->stats.tx_errors++;
 	else
@@ -2378,7 +2384,7 @@ out_xmit:
 }
 #else
 static int __bpf_redirect_neigh_v4(struct sk_buff *skb, struct net_device *dev,
-				   struct bpf_nh_params *nh)
+				   struct bpf_nh_params *nh, u32 flags)
 {
 	kfree_skb(skb);
 	return NET_XMIT_DROP;
@@ -2386,7 +2392,7 @@ static int __bpf_redirect_neigh_v4(struct sk_buff *skb, struct net_device *dev,
 #endif /* CONFIG_INET */
 
 static int __bpf_redirect_neigh(struct sk_buff *skb, struct net_device *dev,
-				struct bpf_nh_params *nh)
+				struct bpf_nh_params *nh, u32 flags)
 {
 	struct ethhdr *ethh = eth_hdr(skb);
 
@@ -2401,9 +2407,9 @@ static int __bpf_redirect_neigh(struct sk_buff *skb, struct net_device *dev,
 	skb_reset_network_header(skb);
 
 	if (skb->protocol == htons(ETH_P_IP))
-		return __bpf_redirect_neigh_v4(skb, dev, nh);
+		return __bpf_redirect_neigh_v4(skb, dev, nh, flags);
 	else if (skb->protocol == htons(ETH_P_IPV6))
-		return __bpf_redirect_neigh_v6(skb, dev, nh);
+		return __bpf_redirect_neigh_v6(skb, dev, nh, flags);
 out:
 	kfree_skb(skb);
 	return -ENOTSUPP;
@@ -2411,9 +2417,9 @@ out:
 
 /* Internal, non-exposed redirect flags. */
 enum {
-	BPF_F_NEIGH	= (1ULL << 1),
-	BPF_F_PEER	= (1ULL << 2),
-	BPF_F_NEXTHOP	= (1ULL << 3),
+	BPF_F_NEIGH	= (1ULL << 2),
+	BPF_F_PEER	= (1ULL << 3),
+	BPF_F_NEXTHOP	= (1ULL << 4),
 #define BPF_F_REDIRECT_INTERNAL	(BPF_F_NEIGH | BPF_F_PEER | BPF_F_NEXTHOP)
 };
 
@@ -2488,7 +2494,7 @@ int skb_do_redirect(struct sk_buff *skb)
 	}
 	return flags & BPF_F_NEIGH ?
 	       __bpf_redirect_neigh(skb, dev, flags & BPF_F_NEXTHOP ?
-				    &ri->nh : NULL) :
+				    &ri->nh : NULL, flags) :
 	       __bpf_redirect(skb, dev, flags);
 out_drop:
 	kfree_skb(skb);
@@ -2499,7 +2505,8 @@ BPF_CALL_2(bpf_redirect, u32, ifindex, u64, flags)
 {
 	struct bpf_redirect_info *ri = this_cpu_ptr(&bpf_redirect_info);
 
-	if (unlikely(flags & (~(BPF_F_INGRESS) | BPF_F_REDIRECT_INTERNAL)))
+	if (unlikely(flags & (~(BPF_F_INGRESS | BPF_F_TSTAMP_RETAIN) |
+			      BPF_F_REDIRECT_INTERNAL)))
 		return TC_ACT_SHOT;
 
 	ri->flags = flags;
@@ -2542,10 +2549,11 @@ BPF_CALL_4(bpf_redirect_neigh, u32, ifindex, struct bpf_redir_neigh *, params,
 {
 	struct bpf_redirect_info *ri = this_cpu_ptr(&bpf_redirect_info);
 
-	if (unlikely((plen && plen < sizeof(*params)) || flags))
+	if (unlikely((plen && plen < sizeof(*params)) ||
+		     (flags & ~BPF_F_TSTAMP_RETAIN)))
 		return TC_ACT_SHOT;
 
-	ri->flags = BPF_F_NEIGH | (plen ? BPF_F_NEXTHOP : 0);
+	ri->flags = BPF_F_NEIGH | (plen ? BPF_F_NEXTHOP : 0) | flags;
 	ri->tgt_index = ifindex;
 
 	BUILD_BUG_ON(sizeof(struct bpf_redir_neigh) != sizeof(struct bpf_nh_params));
