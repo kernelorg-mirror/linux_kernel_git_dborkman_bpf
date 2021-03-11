@@ -429,6 +429,15 @@ static struct ctl_table net_core_table[] = {
 		.proc_handler	= proc_dointvec
 	},
 	{
+		.procname	= "netdev_tstamp_retain",
+		.data		= &netdev_tstamp_retain,
+		.maxlen		= sizeof(int),
+		.mode		= 0644,
+		.proc_handler	= proc_dointvec,
+		.extra1		= SYSCTL_ZERO,
+		.extra2		= SYSCTL_ONE,
+	},
+	{
 		.procname	= "message_cost",
 		.data		= &net_ratelimit_state.interval,
 		.maxlen		= sizeof(int),

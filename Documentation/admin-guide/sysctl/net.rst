@@ -311,6 +311,17 @@ permit to distribute the load on several cpus.
 If set to 1 (default), timestamps are sampled as soon as possible, before
 queueing.
 
+netdev_tstamp_retain
+--------------------
+
+If set to 1, RX or TX packet timestamps are retained upon crossing a network
+namespace. This is useful for fq-based pacing of sockets that are residing in
+network namespaces where fq itself is sitting in init namespace, for example.
+If set to 1, the assumption is that packet timestamps are additionally managed
+by subsystems like BPF.
+
+If set to 0 (default), timestamps are cleared upon crossing network namespaces.
+
 optmem_max
 ----------
 
