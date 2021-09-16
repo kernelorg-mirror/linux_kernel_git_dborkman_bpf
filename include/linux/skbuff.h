@@ -611,13 +611,15 @@ typedef unsigned int sk_buff_data_t;
 typedef unsigned char *sk_buff_data_t;
 #endif
 
+/* skb->tstamp clock bases: */
+#define SKB_TSTAMP_BASE_TAI	0
+#define SKB_TSTAMP_BASE_MONO	1
+
 /**
  *	struct sk_buff - socket buffer
  *	@next: Next buffer in list
  *	@prev: Previous buffer in list
  *	@tstamp: Time we arrived/left
- *	@skb_mstamp_ns: (aka @tstamp) earliest departure time; start point
- *		for retransmit timer
  *	@rbnode: RB tree node, alternative to next/prev for netem/tcp
  *	@list: queue head
  *	@sk: Socket we are owned by
@@ -743,10 +745,9 @@ struct sk_buff {
 		int			ip_defrag_offset;
 	};
 
-	union {
-		ktime_t		tstamp;
-		u64		skb_mstamp_ns; /* earliest departure time */
-	};
+	/* tstamp_base bit clarifies the clock base (monotonic vs tai) */
+	ktime_t				tstamp;
+
 	/*
 	 * This is the control buffer. It is free to use for every
 	 * layer. Please put your private variables there. If you
@@ -872,6 +873,7 @@ struct sk_buff {
 	__u8			decrypted:1;
 #endif
 	__u8			slow_gro:1;
+	__u8			tstamp_base:1;
 
 #ifdef CONFIG_NET_SCHED
 	__u16			tc_index;	/* traffic control index */
@@ -3812,9 +3814,26 @@ static inline void skb_get_new_timestampns(const struct sk_buff *skb,
 	stamp->tv_nsec = ts.tv_nsec;
 }
 
+static inline bool skb_has_tstamp_mono(const struct sk_buff *skb)
+{
+	return skb->tstamp_base == SKB_TSTAMP_BASE_MONO;
+}
+
+static inline void skb_set_tstamp_mono(struct sk_buff *skb, ktime_t time)
+{
+	skb->tstamp = time;
+	skb->tstamp_base = SKB_TSTAMP_BASE_MONO;
+}
+
+static inline void skb_set_tstamp_tai(struct sk_buff *skb, ktime_t time)
+{
+	skb->tstamp = time;
+	skb->tstamp_base = SKB_TSTAMP_BASE_TAI;
+}
+
 static inline void __net_timestamp(struct sk_buff *skb)
 {
-	skb->tstamp = ktime_get_real();
+	skb_set_tstamp_tai(skb, ktime_get_real());
 }
 
 static inline ktime_t net_timedelta(ktime_t t)
@@ -4679,8 +4698,6 @@ static inline void skb_set_redirected(struct sk_buff *skb, bool from_ingress)
 	skb->redirected = 1;
 #ifdef CONFIG_NET_REDIRECT
 	skb->from_ingress = from_ingress;
-	if (skb->from_ingress)
-		skb->tstamp = 0;
 #endif
 }
 

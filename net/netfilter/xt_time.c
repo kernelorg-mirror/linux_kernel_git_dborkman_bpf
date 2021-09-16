@@ -166,8 +166,7 @@ time_mt(const struct sk_buff *skb, struct xt_action_param *par)
 	 * We need real time here, but we can neither use skb->tstamp
 	 * nor __net_timestamp().
 	 *
-	 * skb->tstamp and skb->skb_mstamp_ns overlap, however, they
-	 * use different clock types (real vs monotonic).
+	 * skb->tstamp uses different clock types (real vs monotonic).
 	 *
 	 * Suppose you have two rules:
 	 *	1. match before 13:00

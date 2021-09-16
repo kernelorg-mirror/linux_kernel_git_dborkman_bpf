@@ -440,7 +440,6 @@ static inline int ip6_forward_finish(struct net *net, struct sock *sk,
 	}
 #endif
 
-	skb->tstamp = 0;
 	return dst_output(net, sk, skb);
 }
 

@@ -448,7 +448,8 @@ static int fq_enqueue(struct sk_buff *skb, struct Qdisc *sch,
 	if (unlikely(sch->q.qlen >= sch->limit))
 		return qdisc_drop(skb, sch, to_free);
 
-	if (!skb->tstamp) {
+	if (!skb_has_tstamp_mono(skb) || !skb->tstamp) {
+		skb_set_tstamp_mono(skb, 0);
 		fq_skb_cb(skb)->time_to_send = q->ktime_cache = ktime_get_ns();
 	} else {
 		/* Check if packet timestamp is too far in the future.

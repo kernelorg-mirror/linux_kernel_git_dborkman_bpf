@@ -2137,7 +2137,7 @@ EXPORT_SYMBOL(net_disable_timestamp);
 
 static inline void net_timestamp_set(struct sk_buff *skb)
 {
-	skb->tstamp = 0;
+	skb_set_tstamp_tai(skb, 0);
 	if (static_branch_unlikely(&netstamp_needed_key))
 		__net_timestamp(skb);
 }
