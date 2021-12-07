@@ -10853,6 +10853,7 @@ struct net_device *alloc_netdev_mqs(int sizeof_priv, const char *name,
 	dev->gso_max_segs = GSO_MAX_SEGS;
 	dev->upper_level = 1;
 	dev->lower_level = 1;
+	dev->xnet_flush_tstamp = 1;
 #ifdef CONFIG_LOCKDEP
 	dev->nested_level = 0;
 	INIT_LIST_HEAD(&dev->unlink_list);

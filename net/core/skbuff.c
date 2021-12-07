@@ -5440,19 +5440,21 @@ bool skb_try_coalesce(struct sk_buff *to, struct sk_buff *from,
 EXPORT_SYMBOL(skb_try_coalesce);
 
 /**
- * skb_scrub_packet - scrub an skb
+ * __skb_scrub_packet - scrub an skb
  *
  * @skb: buffer to clean
  * @xnet: packet is crossing netns
+ * @tstamp: timestamp needs scrubbing
  *
- * skb_scrub_packet can be used after encapsulating or decapsulting a packet
+ * __skb_scrub_packet can be used after encapsulating or decapsulting a packet
  * into/from a tunnel. Some information have to be cleared during these
  * operations.
- * skb_scrub_packet can also be used to clean a skb before injecting it in
+ *
+ * __skb_scrub_packet can also be used to clean a skb before injecting it in
  * another namespace (@xnet == true). We have to clear all information in the
  * skb that could impact namespace isolation.
  */
-void skb_scrub_packet(struct sk_buff *skb, bool xnet)
+void __skb_scrub_packet(struct sk_buff *skb, bool xnet, bool tstamp)
 {
 	skb->pkt_type = PACKET_HOST;
 	skb->skb_iif = 0;
@@ -5472,9 +5474,10 @@ void skb_scrub_packet(struct sk_buff *skb, bool xnet)
 
 	ipvs_reset(skb);
 	skb->mark = 0;
-	skb->tstamp = 0;
+	if (tstamp)
+		skb->tstamp = 0;
 }
-EXPORT_SYMBOL_GPL(skb_scrub_packet);
+EXPORT_SYMBOL_GPL(__skb_scrub_packet);
 
 /**
  * skb_gso_transport_seglen - Return length of individual segments of a gso packet

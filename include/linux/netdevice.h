@@ -2172,6 +2172,7 @@ struct net_device {
 	struct timer_list	watchdog_timer;
 	int			watchdog_timeo;
 
+	u32			xnet_flush_tstamp;
 	u32                     proto_down_reason;
 
 	struct list_head	todo_list;
@@ -4137,7 +4138,8 @@ static __always_inline int ____dev_forward_skb(struct net_device *dev,
 		return NET_RX_DROP;
 	}
 
-	skb_scrub_packet(skb, !net_eq(dev_net(dev), dev_net(skb->dev)));
+	__skb_scrub_packet(skb, !net_eq(dev_net(dev), dev_net(skb->dev)),
+			   READ_ONCE(dev->xnet_flush_tstamp));
 	skb->priority = 0;
 	return 0;
 }

@@ -3688,7 +3688,11 @@ int skb_zerocopy(struct sk_buff *to, struct sk_buff *from,
 		 int len, int hlen);
 void skb_split(struct sk_buff *skb, struct sk_buff *skb1, const u32 len);
 int skb_shift(struct sk_buff *tgt, struct sk_buff *skb, int shiftlen);
-void skb_scrub_packet(struct sk_buff *skb, bool xnet);
+void __skb_scrub_packet(struct sk_buff *skb, bool xnet, bool tstamp);
+static __always_inline void skb_scrub_packet(struct sk_buff *skb, bool xnet)
+{
+	__skb_scrub_packet(skb, xnet, true);
+}
 bool skb_gso_validate_network_len(const struct sk_buff *skb, unsigned int mtu);
 bool skb_gso_validate_mac_len(const struct sk_buff *skb, unsigned int len);
 struct sk_buff *skb_segment(struct sk_buff *skb, netdev_features_t features);

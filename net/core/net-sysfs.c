@@ -403,6 +403,23 @@ static ssize_t gro_flush_timeout_store(struct device *dev,
 }
 NETDEVICE_SHOW_RW(gro_flush_timeout, fmt_ulong);
 
+static int change_xnet_flush_tstamp(struct net_device *dev, unsigned long val)
+{
+	WRITE_ONCE(dev->xnet_flush_tstamp, val);
+	return 0;
+}
+
+static ssize_t xnet_flush_tstamp_store(struct device *dev,
+				      struct device_attribute *attr,
+				      const char *buf, size_t len)
+{
+	if (!capable(CAP_NET_ADMIN))
+		return -EPERM;
+
+	return netdev_store(dev, attr, buf, len, change_xnet_flush_tstamp);
+}
+NETDEVICE_SHOW_RW(xnet_flush_tstamp, fmt_dec);
+
 static int change_napi_defer_hard_irqs(struct net_device *dev, unsigned long val)
 {
 	WRITE_ONCE(dev->napi_defer_hard_irqs, val);
@@ -651,6 +668,7 @@ static struct attribute *net_class_attrs[] __ro_after_init = {
 	&dev_attr_flags.attr,
 	&dev_attr_tx_queue_len.attr,
 	&dev_attr_gro_flush_timeout.attr,
+	&dev_attr_xnet_flush_tstamp.attr,
 	&dev_attr_napi_defer_hard_irqs.attr,
 	&dev_attr_phys_port_id.attr,
 	&dev_attr_phys_port_name.attr,
