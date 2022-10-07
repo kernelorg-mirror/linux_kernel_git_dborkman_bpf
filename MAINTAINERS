@@ -5,9 +5,6 @@ Please try to follow the guidelines below.  This will make things
 easier on the maintainers.  Not all of these guidelines matter for every
 trivial patch so apply some common sense.
 
-Tips for patch submitters
--------------------------
-
 1.	Always *test* your changes, however small, on at least 4 or
 	5 people, preferably many more.
 
